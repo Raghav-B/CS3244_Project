@@ -1,0 +1,6 @@
+yolov4-deepsort/
+**/__pycache__/
+*.swp
+checkpoints/
+*.weights
+outputs/

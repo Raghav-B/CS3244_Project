@@ -2,10 +2,14 @@ import os
 # comment out below line to enable tensorflow logging outputs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import time
+import threading
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import tensorflow as tf
+
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
 if len(physical_devices) > 0:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
+
 from absl import app, flags, logging
 from absl.flags import FLAGS
 import core.utils as utils
@@ -23,6 +27,7 @@ from deep_sort import preprocessing, nn_matching
 from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
+
 flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
 flags.DEFINE_string('weights', './checkpoints/yolov4-416',
                     'path to weights file')
@@ -37,6 +42,52 @@ flags.DEFINE_float('score', 0.50, 'score threshold')
 flags.DEFINE_boolean('dont_show', False, 'dont show video output')
 flags.DEFINE_boolean('info', False, 'show detailed info of tracked objects')
 flags.DEFINE_boolean('count', False, 'count objects being tracked on screen')
+
+
+class VideoReader():
+    def __init__(self, video_path):
+        self.vid_cap = cv2.VideoCapture(video_path)
+        self.frame_time = (1/self.vid_cap.get(cv2.CAP_PROP_FPS)) * 1000 # in ms
+        self.cur_frame = np.zeros((416,416,3), np.uint8)
+
+        self.is_started = False
+        self.frame_lock = threading.Lock()
+
+        self.read_thread = threading.Thread(target=self.read_thread_func)
+        self.read_thread.daemon = True
+        self.read_thread.start()
+
+    def read_thread_func(self):
+        while True:
+            if self.is_started:
+                ret, frame = self.vid_cap.read()
+                
+                self.frame_lock.acquire()
+                if ret:
+                    self.cur_frame = frame.copy()
+                else: # Video has finished being read
+                    self.cur_frame = None
+                self.frame_lock.release()
+
+                if not ret: # End thread
+                    break
+
+                time.sleep(self.frame_time/1000)    
+                #cv2.imshow("hmm", frame)
+                #cv2.waitKey(int(self.frame_time))
+
+    def read_latest(self, frame_num):
+        if frame_num >= 1: # Needed because the very first detection frame takes its own sweet time
+            self.is_started = True
+    
+        frame = None
+        
+        self.frame_lock.acquire()
+        if self.cur_frame is not None:
+            frame = self.cur_frame.copy()
+        self.frame_lock.release()
+        
+        return self.cur_frame
 
 def main(_argv):
     # Definition of the parameters
@@ -73,35 +124,38 @@ def main(_argv):
         saved_model_loaded = tf.saved_model.load(FLAGS.weights, tags=[tag_constants.SERVING])
         infer = saved_model_loaded.signatures['serving_default']
 
-    # begin video capture
-    try:
-        vid = cv2.VideoCapture(int(video_path))
-    except:
-        vid = cv2.VideoCapture(video_path)
 
-    out = None
+    # # begin video capture
+    # try:
+    #     vid = cv2.VideoCapture(int(video_path))
+    # except:
+    #     vid = cv2.VideoCapture(video_path)
+
+    # out = None
 
     # get video ready to save locally if flag is set
-    if FLAGS.output:
-        # by default VideoCapture returns float instead of int
-        width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(vid.get(cv2.CAP_PROP_FPS))
-        codec = cv2.VideoWriter_fourcc(*FLAGS.output_format)
-        out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
+    # if FLAGS.output:
+    #     # by default VideoCapture returns float instead of int
+    #     width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
+    #     height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    #     fps = int(vid.get(cv2.CAP_PROP_FPS))
+    #     codec = cv2.VideoWriter_fourcc(*FLAGS.output_format)
+    #     out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
+
+    video = VideoReader(video_path)
 
     frame_num = 0
     # while video is running
     while True:
-        return_value, frame = vid.read()
-        if return_value:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(frame)
-        else:
+        frame = video.read_latest(frame_num)
+        if frame is None:
             print('Video has ended or failed, try a different video format!')
             break
-        frame_num +=1
+
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         print('Frame #: ', frame_num)
+        frame_num +=1
+
         frame_size = frame.shape[:2]
         image_data = cv2.resize(frame, (input_size, input_size))
         image_data = image_data / 255.
@@ -150,6 +204,12 @@ def main(_argv):
         original_h, original_w, _ = frame.shape
         bboxes = utils.format_boxes(bboxes, original_h, original_w)
 
+        # for j in range(0, len(bboxes)):
+        #     if classes[j] != 0:
+        #         continue
+        #     box = bboxes[j]
+        #     cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (255, 0, 0), 3)
+
         # store all predictions in one parameter for simplicity when calling functions
         pred_bbox = [bboxes, scores, classes, num_objects]
 
@@ -157,10 +217,10 @@ def main(_argv):
         class_names = utils.read_class_names(cfg.YOLO.CLASSES)
 
         # by default allow all classes in .names file
-        allowed_classes = list(class_names.values())
+        #allowed_classes = list(class_names.values())
         
         # custom allowed classes (uncomment line below to customize tracker for only people)
-        #allowed_classes = ['person']
+        allowed_classes = ['person']
 
         # loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []
@@ -202,34 +262,35 @@ def main(_argv):
 
         # update tracks
         for track in tracker.tracks:
+            # If track is not confirmed or if it has been 1 second since the track was last updated,
+            # we will 
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue 
             bbox = track.to_tlbr()
             class_name = track.get_class()
             
-        # draw bbox on screen
+            # draw bbox on screen
             color = colors[int(track.track_id) % len(colors)]
             color = [i * 255 for i in color]
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), color, 2)
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
             cv2.putText(frame, class_name + "-" + str(track.track_id),(int(bbox[0]), int(bbox[1]-10)),0, 0.75, (255,255,255),2)
 
-        # if enable info flag then print details about each track
-            if FLAGS.info:
-                print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
+        # # if enable info flag then print details about each track
+        #     if FLAGS.info:
+        #         print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
         print("FPS: %.2f" % fps)
-        result = np.asarray(frame)
         result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         
         if not FLAGS.dont_show:
             cv2.imshow("Output Video", result)
         
         # if output flag is set, save video file
-        if FLAGS.output:
-            out.write(result)
+        # if FLAGS.output:
+        #     out.write(result)
         if cv2.waitKey(1) & 0xFF == ord('q'): break
     cv2.destroyAllWindows()
 
