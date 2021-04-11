@@ -1,9 +1,8 @@
 import os
 # comment out below line to enable tensorflow logging outputs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-import time
-import threading
 #os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 import tensorflow as tf
 
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -16,12 +15,19 @@ import core.utils as utils
 from core.yolov4 import filter_boxes
 from tensorflow.python.saved_model import tag_constants
 from core.config import cfg
+
+import time
+import threading
 from PIL import Image
 import cv2
 import numpy as np
+from sklearn.cluster import DBSCAN
 import matplotlib.pyplot as plt
+import random
+
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
+
 # deep sort imports
 from deep_sort import preprocessing, nn_matching
 from deep_sort.detection import Detection
@@ -102,6 +108,8 @@ def main(_argv):
     metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
     # initialize tracker
     tracker = Tracker(metric)
+    # initialize DBSCAN model
+    dbscan_model = DBSCAN(eps=150, min_samples=1)
 
     # load configuration for object detector
     config = ConfigProto()
@@ -204,6 +212,7 @@ def main(_argv):
         original_h, original_w, _ = frame.shape
         bboxes = utils.format_boxes(bboxes, original_h, original_w)
 
+        # Drawing YOLO detected bounding boxes
         # for j in range(0, len(bboxes)):
         #     if classes[j] != 0:
         #         continue
@@ -218,7 +227,6 @@ def main(_argv):
 
         # by default allow all classes in .names file
         #allowed_classes = list(class_names.values())
-        
         # custom allowed classes (uncomment line below to customize tracker for only people)
         allowed_classes = ['person']
 
@@ -261,24 +269,48 @@ def main(_argv):
         tracker.update(detections)
 
         # update tracks
+        centroids = []
         for track in tracker.tracks:
-            # If track is not confirmed or if it has been 1 second since the track was last updated,
-            # we will 
+            # If track is not confirmed or if it has been 2 or more frames since the track
+            # was not found, we do not draw this track. The deletion of this track will
+            # be handled automatically by the tracker.update() function I believe
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue 
             bbox = track.to_tlbr()
             class_name = track.get_class()
             
+            centroids.append(track.get_centroid())
+
             # draw bbox on screen
             color = colors[int(track.track_id) % len(colors)]
             color = [i * 255 for i in color]
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), color, 2)
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
             cv2.putText(frame, class_name + "-" + str(track.track_id),(int(bbox[0]), int(bbox[1]-10)),0, 0.75, (255,255,255),2)
+        
+            # if enable info flag then print details about each track
+            if FLAGS.info:
+                print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
 
-        # # if enable info flag then print details about each track
-        #     if FLAGS.info:
-        #         print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
+        if len(centroids) != 0:
+            cluster_assignments = dbscan_model.fit_predict(centroids)
+            clusters = np.unique(cluster_assignments)
+            # print(clusters)
+
+            point_list = []
+            # print(centroids)
+            for cluster in clusters:
+                row_ix = np.where(cluster_assignments == cluster)
+                # print(row_ix)
+                #point_arr = np.column_stack((centroids[row_ix, 0], centroids[row_ix, 1]))
+                point_arr = [centroids[i] for i in row_ix[0]]
+                # print(point_arr)
+                point_list.append(point_arr)
+
+            for points in point_list:
+                hull = cv2.convexHull(np.array(points), False)
+                cv2.drawContours(frame, [hull], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 20)
+                #cv2.drawContours(frame, [np.array(points)], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 3)
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
@@ -291,7 +323,9 @@ def main(_argv):
         # if output flag is set, save video file
         # if FLAGS.output:
         #     out.write(result)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
+        break_check = cv2.waitKey(1) & 0xFF
+        if break_check ==ord('q') or break_check == 27: 
+            break
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':

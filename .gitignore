@@ -4,3 +4,4 @@ yolov4-deepsort/
 checkpoints/
 *.weights
 outputs/
+test_videos/

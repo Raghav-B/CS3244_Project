@@ -96,6 +96,14 @@ class Track:
         ret[:2] -= ret[2:] / 2
         return ret
 
+    def get_centroid(self):
+        """Get centroid of current track in (x,y) format)
+        """
+        ret = self.to_tlwh()
+        x = ret[0] + ret[2]/2 # Add half of width to x
+        y = ret[1] + ret[3]/2 # Add half of height to x
+        return [int(x),int(y)]
+
     def to_tlbr(self):
         """Get current position in bounding box format `(min x, miny, max x,
         max y)`.
