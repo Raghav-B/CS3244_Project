@@ -203,14 +203,14 @@ def main(_argv):
 
         # format bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, width, height
         original_h, original_w, _ = frame.shape
-        bboxes = utils.format_boxes(bboxes, original_h, original_w)
+        bboxes, bboxes_xyxy = utils.format_boxes(bboxes, original_h, original_w)
 
         # Drawing YOLO detected bounding boxes
-        # for j in range(0, len(bboxes)):
-        #     if classes[j] != 0:
-        #         continue
-        #     box = bboxes[j]
-        #     cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (255, 0, 0), 3)
+        for j in range(0, len(bboxes_xyxy)):
+            if classes[j] != 0:
+                continue
+            box = bboxes_xyxy[j]
+            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (255, 0, 0), 3)
 
         # store all predictions in one parameter for simplicity when calling functions
         pred_bbox = [bboxes, scores, classes, num_objects]
@@ -242,27 +242,43 @@ def main(_argv):
         bboxes = np.delete(bboxes, deleted_indx, axis=0)
         scores = np.delete(scores, deleted_indx, axis=0)
 
-        # encode yolo detections and feed to tracker
-        features = encoder(frame, bboxes)
-        detections = [Detection(bbox, score, class_name, feature) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)]
+        # Get list of centroids for YOLO detections
+        centroids = [utils.get_centroid(bboxes[i]) for i in range(0, len(bboxes))]
+        # centroids = []
+        # for bbox in bboxes_xyxy:
+        #     centroids.append([bbox[0], bbox[1]])
+        #     centroids.append([bbox[2], bbox[3]])
 
-        #initialize color map
+        # Draw clusters of people too close together
+        cluster_bboxes = []
+        if len(centroids) != 0:
+            cluster_assignments = dbscan_model.fit_predict(centroids)
+            clusters = np.unique(cluster_assignments)
+
+            for cluster in clusters:
+                row_ix = np.where(cluster_assignments == cluster)
+                point_arr = [centroids[i] for i in row_ix[0]]
+
+                # Get bounding rectangle that covers group of people
+                x,y,w,h = cv2.boundingRect(np.array(point_arr))
+                
+                # Skip all bounding rectangles that have height or width of 1
+                if w != 1 or h != 1:
+                    cluster_bboxes.append([x,y,w,h])
+
+        # Encode cluster bboxes and feed to tracker
+        features = encoder(frame, cluster_bboxes)
+        detections = [Detection(bbox, 0, "group", feature) for bbox, feature in zip(cluster_bboxes, features)]
+
+        # Initialize color map
         cmap = plt.get_cmap('tab20b')
-        colors = [cmap(i)[:3] for i in np.linspace(0, 1, 20)]
-
-        # run non-maxima supression
-        boxs = np.array([d.tlwh for d in detections])
-        scores = np.array([d.confidence for d in detections])
-        classes = np.array([d.class_name for d in detections])
-        indices = preprocessing.non_max_suppression(boxs, classes, nms_max_overlap, scores)
-        detections = [detections[i] for i in indices]       
-
+        colors = [cmap(i)[:3] for i in np.linspace(0, 1, 20)]    
+        
         # Call the tracker
         tracker.predict()
         tracker.update(detections)
 
         # update tracks
-        centroids = []
         for track in tracker.tracks:
             # If track is not confirmed or if it has been 2 or more frames since the track
             # was not found, we do not draw this track. The deletion of this track will
@@ -272,8 +288,6 @@ def main(_argv):
             bbox = track.to_tlbr()
             class_name = track.get_class()
             
-            centroids.append(track.get_centroid())
-
             # draw bbox on screen
             color = colors[int(track.track_id) % len(colors)]
             color = [i * 255 for i in color]
@@ -281,25 +295,13 @@ def main(_argv):
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
             cv2.putText(frame, class_name + "-" + str(track.track_id),(int(bbox[0]), int(bbox[1]-10)),0, 0.75, (255,255,255),2)
         
+            # TODO If track age is greater than a certain number of frames, we issue an alert! Omg I'm done yay.
+            # TODO Also need to do a check for how many people reside in one track hmmm. 
+            # This can be done by editing the Tracker, Track and Detection classes
+
             # if enable info flag then print details about each track
             if FLAGS.info:
                 print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
-
-        if len(centroids) != 0:
-            cluster_assignments = dbscan_model.fit_predict(centroids)
-            clusters = np.unique(cluster_assignments)
-
-            for cluster in clusters:
-                row_ix = np.where(cluster_assignments == cluster)
-                point_arr = [centroids[i] for i in row_ix[0]]
-
-                # hull = cv2.convexHull(np.array(point_arr))
-                # cv2.drawContours(frame, [hull], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 20)
-                x,y,w,h = cv2.boundingRect(np.array(point_arr))
-                cv2.rectangle(frame, (x,y), (x+w,y+h), (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 20)
-                #cv2.drawContours(frame, [np.array(point_arr)], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 3)
-
-
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)

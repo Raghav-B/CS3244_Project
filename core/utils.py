@@ -124,8 +124,9 @@ def image_preprocess(image, target_size, gt_boxes=None):
         gt_boxes[:, [1, 3]] = gt_boxes[:, [1, 3]] * scale + dh
         return image_paded, gt_boxes
 
-# helper function to convert bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, xmax, ymax
+# helper function to convert bounding boxes from normalized ymin, xmin, ymax, xmax ---> xmin, ymin, width, height
 def format_boxes(bboxes, image_height, image_width):
+    bboxes_xyxy = []
     for box in bboxes:
         ymin = int(box[0] * image_height)
         xmin = int(box[1] * image_width)
@@ -134,8 +135,14 @@ def format_boxes(bboxes, image_height, image_width):
         width = xmax - xmin
         height = ymax - ymin
         box[0], box[1], box[2], box[3] = xmin, ymin, width, height
-        #box[0], box[1], box[2], box[3] = xmin, ymin, xmax, ymax
-    return bboxes
+        bboxes_xyxy.append([xmin, ymin, xmax, ymax])
+
+    return bboxes, bboxes_xyxy
+
+def get_centroid(bbox):
+    x = bbox[0] + bbox[2]/2
+    y = bbox[1] + bbox[3]/2
+    return [int(x), int(y)]
 
 def draw_bbox(image, bboxes, info = False, show_label=True, classes=read_class_names(cfg.YOLO.CLASSES)):
     num_classes = len(classes)
