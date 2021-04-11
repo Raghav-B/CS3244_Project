@@ -132,23 +132,16 @@ def main(_argv):
         saved_model_loaded = tf.saved_model.load(FLAGS.weights, tags=[tag_constants.SERVING])
         infer = saved_model_loaded.signatures['serving_default']
 
-
-    # # begin video capture
-    # try:
-    #     vid = cv2.VideoCapture(int(video_path))
-    # except:
-    #     vid = cv2.VideoCapture(video_path)
-
-    # out = None
-
     # get video ready to save locally if flag is set
-    # if FLAGS.output:
-    #     # by default VideoCapture returns float instead of int
-    #     width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
-    #     height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    #     fps = int(vid.get(cv2.CAP_PROP_FPS))
-    #     codec = cv2.VideoWriter_fourcc(*FLAGS.output_format)
-    #     out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
+    out = None
+    if FLAGS.output:
+        # by default VideoCapture returns float instead of int
+        vid = cv2.VideoCapture(video_path)
+        width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = int(vid.get(cv2.CAP_PROP_FPS))
+        codec = cv2.VideoWriter_fourcc(*FLAGS.output_format)
+        out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
     video = VideoReader(video_path)
 
@@ -295,22 +288,18 @@ def main(_argv):
         if len(centroids) != 0:
             cluster_assignments = dbscan_model.fit_predict(centroids)
             clusters = np.unique(cluster_assignments)
-            # print(clusters)
 
-            point_list = []
-            # print(centroids)
             for cluster in clusters:
                 row_ix = np.where(cluster_assignments == cluster)
-                # print(row_ix)
-                #point_arr = np.column_stack((centroids[row_ix, 0], centroids[row_ix, 1]))
                 point_arr = [centroids[i] for i in row_ix[0]]
-                # print(point_arr)
-                point_list.append(point_arr)
 
-            for points in point_list:
-                hull = cv2.convexHull(np.array(points), False)
-                cv2.drawContours(frame, [hull], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 20)
-                #cv2.drawContours(frame, [np.array(points)], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 3)
+                # hull = cv2.convexHull(np.array(point_arr))
+                # cv2.drawContours(frame, [hull], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 20)
+                x,y,w,h = cv2.boundingRect(np.array(point_arr))
+                cv2.rectangle(frame, (x,y), (x+w,y+h), (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 20)
+                #cv2.drawContours(frame, [np.array(point_arr)], -1, (random.randint(0,255),random.randint(0,255),random.randint(0,255)), 3)
+
+
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
@@ -321,8 +310,9 @@ def main(_argv):
             cv2.imshow("Output Video", result)
         
         # if output flag is set, save video file
-        # if FLAGS.output:
-        #     out.write(result)
+        if FLAGS.output:
+            out.write(result)
+
         break_check = cv2.waitKey(1) & 0xFF
         if break_check ==ord('q') or break_check == 27: 
             break
