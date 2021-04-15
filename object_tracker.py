@@ -52,13 +52,21 @@ flags.DEFINE_boolean('count', False, 'count objects being tracked on screen')
 
 class VideoReader():
     def __init__(self, video_path):
-        self.vid_cap = cv2.VideoCapture(video_path)
+        self.video_path = video_path
+        self.vid_cap = cv2.VideoCapture(self.video_path)
         self.frame_time = (1/self.vid_cap.get(cv2.CAP_PROP_FPS)) * 1000 # in ms
         self.cur_frame = np.zeros((416,416,3), np.uint8)
 
         self.is_started = False
         self.frame_lock = threading.Lock()
 
+        self.read_thread = threading.Thread(target=self.read_thread_func)
+        self.read_thread.daemon = True
+        self.read_thread.start()
+
+    def reset(self):
+        self.vid_cap = cv2.VideoCapture(self.video_path)
+        self.cur_frame = np.zeros((416,416,3), np.uint8)
         self.read_thread = threading.Thread(target=self.read_thread_func)
         self.read_thread.daemon = True
         self.read_thread.start()
@@ -71,11 +79,13 @@ class VideoReader():
                 self.frame_lock.acquire()
                 if ret:
                     self.cur_frame = frame.copy()
-                else: # Video has finished being read
+                # Video has finished being read
+                else: 
                     self.cur_frame = None
                 self.frame_lock.release()
 
-                if not ret: # End thread
+                # End thread
+                if frame is None:
                     break
 
                 time.sleep(self.frame_time/1000)    
@@ -111,6 +121,8 @@ def main(_argv):
     # initialize DBSCAN model
     dbscan_model = DBSCAN(eps=150, min_samples=1)
 
+    print("Working")
+
     # load configuration for object detector
     config = ConfigProto()
     config.gpu_options.allow_growth = True
@@ -144,14 +156,18 @@ def main(_argv):
         out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
     video = VideoReader(video_path)
+    display_yolo = False
+    display_groups = True
 
     frame_num = 0
     # while video is running
     while True:
         frame = video.read_latest(frame_num)
         if frame is None:
-            print('Video has ended or failed, try a different video format!')
-            break
+            print('Video has ended, restarting video...')
+            video.reset()
+            tracker.reset_tracks()
+            frame = video.read_latest(frame_num)
 
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         print('Frame #: ', frame_num)
@@ -206,11 +222,12 @@ def main(_argv):
         bboxes, bboxes_xyxy = utils.format_boxes(bboxes, original_h, original_w)
 
         # Drawing YOLO detected bounding boxes
-        for j in range(0, len(bboxes_xyxy)):
-            if classes[j] != 0:
-                continue
-            box = bboxes_xyxy[j]
-            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (255, 0, 0), 3)
+        if display_yolo:
+            for j in range(0, len(bboxes_xyxy)):
+                if classes[j] != 0:
+                    continue
+                box = bboxes_xyxy[j]
+                cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (255, 0, 0), 3)
 
         # store all predictions in one parameter for simplicity when calling functions
         pred_bbox = [bboxes, scores, classes, num_objects]
@@ -244,10 +261,6 @@ def main(_argv):
 
         # Get list of centroids for YOLO detections
         centroids = [utils.get_centroid(bboxes[i]) for i in range(0, len(bboxes))]
-        # centroids = []
-        # for bbox in bboxes_xyxy:
-        #     centroids.append([bbox[0], bbox[1]])
-        #     centroids.append([bbox[2], bbox[3]])
 
         # Draw clusters of people too close together
         cluster_bboxes = []
@@ -263,7 +276,7 @@ def main(_argv):
                 x,y,w,h = cv2.boundingRect(np.array(point_arr))
                 
                 # Skip all bounding rectangles that have height or width of 1
-                if w != 1 or h != 1:
+                if w != 1 and h != 1:
                     cluster_bboxes.append([x,y,w,h])
 
         # Encode cluster bboxes and feed to tracker
@@ -315,9 +328,12 @@ def main(_argv):
         if FLAGS.output:
             out.write(result)
 
-        break_check = cv2.waitKey(1) & 0xFF
-        if break_check ==ord('q') or break_check == 27: 
+        key_press = cv2.waitKey(1) & 0xFF
+        if key_press == ord('q') or key_press == 27: 
             break
+        elif key_press == ord('y'):
+            display_yolo = not display_yolo
+
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':

@@ -55,6 +55,9 @@ class Tracker:
         for track in self.tracks:
             track.predict(self.kf)
 
+    def reset_tracks(self):
+        self.tracks = []
+
     def update(self, detections):
         """Perform measurement update and track management.
 
