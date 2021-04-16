@@ -90,6 +90,7 @@ class ImageEncoder(object):
         self.feature_dim = self.output_var.get_shape().as_list()[-1]
         self.image_shape = self.input_var.get_shape().as_list()[1:]
 
+    # Allows class to be called as a function
     def __call__(self, data_x, batch_size=32):
         out = np.zeros((len(data_x), self.feature_dim), np.float32)
         _run_in_batches(
