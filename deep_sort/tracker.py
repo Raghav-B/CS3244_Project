@@ -4,7 +4,7 @@ import numpy as np
 from . import kalman_filter
 from . import linear_assignment
 from . import iou_matching
-from .track import Track
+from .track import Track, GroupTrack
 
 
 class Tracker:
@@ -145,7 +145,7 @@ class GroupTracker(Tracker):
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
         class_name = detection.get_class()
-        self.tracks.append(Track(
+        self.tracks.append(GroupTrack(
             mean, covariance, self._next_id, self.n_init, self.max_age,
             detection.num_people, detection.feature, class_name))
         self._next_id += 1
