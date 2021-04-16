@@ -132,8 +132,21 @@ class Tracker:
 
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
-        class_name = "group"
+        class_name = detection.get_class()
+        self.tracks.append(Track(
+            mean, covariance, self._next_id, self.n_init, self.max_age,
+            detection.feature, class_name))
+        self._next_id += 1
+
+class GroupTracker(Tracker):
+    def __init__(self, metric, max_iou_distance=0.7, max_age=60, n_init=3):
+        super().__init__(metric, max_iou_distance, max_age, n_init)
+    
+    def _initiate_track(self, detection):
+        mean, covariance = self.kf.initiate(detection.to_xyah())
+        class_name = detection.get_class()
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, self.max_age,
             detection.num_people, detection.feature, class_name))
         self._next_id += 1
+        

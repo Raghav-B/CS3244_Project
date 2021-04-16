@@ -161,15 +161,12 @@ def main(_argv):
         bboxes, bboxes_xyxy = utils.format_boxes(bboxes, original_h, original_w)
 
         # Drawing YOLO detected bounding boxes
-        if display_yolo:
-            for j in range(0, len(bboxes_xyxy)):
-                if classes[j] != 0:
-                    continue
-                box = bboxes_xyxy[j]
-                cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 3)
-
-        # Store all predictions in one parameter for simplicity when calling functions
-        pred_bbox = [bboxes, scores, classes, num_objects]
+        # if display_yolo:
+        #     for j in range(0, len(bboxes_xyxy)):
+        #         if classes[j] != 0:
+        #             continue
+        #         box = bboxes_xyxy[j]
+        #         cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 3)
 
         # Loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []

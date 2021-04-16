@@ -64,7 +64,7 @@ class Track:
     """
 
     def __init__(self, mean, covariance, track_id, n_init, max_age,
-                num_people, feature=None, class_name=None):
+                feature=None, class_name=None):
         self.mean = mean
         self.covariance = covariance
         self.track_id = track_id
@@ -81,8 +81,6 @@ class Track:
         self._max_age = max_age
         self.class_name = class_name
 
-        self.num_people = num_people
-
     def to_tlwh(self):
         """Get current position in bounding box format `(top left x, top left y,
         width, height)`.
@@ -97,14 +95,6 @@ class Track:
         ret[2] *= ret[3]
         ret[:2] -= ret[2:] / 2
         return ret
-
-    def get_centroid(self):
-        """Get centroid of current track in (x,y) format)
-        """
-        ret = self.to_tlwh()
-        x = ret[0] + ret[2]/2 # Add half of width to x
-        y = ret[1] + ret[3]/2 # Add half of height to x
-        return [int(x),int(y)]
 
     def to_tlbr(self):
         """Get current position in bounding box format `(min x, miny, max x,
@@ -158,8 +148,6 @@ class Track:
         if self.state == TrackState.Tentative and self.hits >= self._n_init:
             self.state = TrackState.Confirmed
 
-        self.num_people = detection.num_people
-
     def mark_missed(self):
         """Mark this track as missed (no association at the current time step).
         """
@@ -180,3 +168,41 @@ class Track:
     def is_deleted(self):
         """Returns True if this track is dead and should be deleted."""
         return self.state == TrackState.Deleted
+
+class GroupTrack(Track):
+    def __init__(self, mean, covariance, track_id, n_init, max_age,
+            num_people, feature=None, class_name=None):
+        super().__init__(mean, covariance, track_id, n_init, max_age,
+                feature, class_name)
+        self.num_people = num_people
+
+    def get_centroid(self):
+        """Get centroid of current track in (x,y) format)
+        """
+        ret = self.to_tlwh()
+        x = ret[0] + ret[2]/2 # Add half of width to x
+        y = ret[1] + ret[3]/2 # Add half of height to x
+        return [int(x),int(y)]
+
+    def update(self, kf, detection):
+        """Perform Kalman filter measurement update step and update the feature
+        cache.
+
+        Parameters
+        ----------
+        kf : kalman_filter.KalmanFilter
+            The Kalman filter.
+        detection : Detection
+            The associated detection.
+
+        """
+        self.mean, self.covariance = kf.update(
+            self.mean, self.covariance, detection.to_xyah())
+        self.features.append(detection.feature)
+
+        self.hits += 1
+        self.time_since_update = 0
+        if self.state == TrackState.Tentative and self.hits >= self._n_init:
+            self.state = TrackState.Confirmed
+
+        self.num_people = detection.num_people
